@@ -12,7 +12,7 @@
 #include <string>
 #include <iterator>
 
-#define USE_ZLIB 1
+#undef USE_ZLIB
 #if USE_ZLIB
 #  ifndef _LFS64_LARGEFILE
 #    define _LFS64_LARGEFILE 0

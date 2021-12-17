@@ -12,6 +12,8 @@
 #include "logger.defines.hpp"
 #include "logtag.hpp"
 
+#pragma warning(disable: 4127) // conditional expression is constant
+
 namespace cv {
 namespace utils {
 namespace logging {

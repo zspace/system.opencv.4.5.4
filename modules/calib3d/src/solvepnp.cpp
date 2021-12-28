@@ -137,6 +137,119 @@ bool solvePnP( InputArray opoints, InputArray ipoints,
     return solutions > 0;
 }
 
+bool solvePnPWithErrors(InputArray _opoints, InputArray _ipoints,
+                        InputArray _cameraMatrix, InputArray _distCoeffs,
+                        OutputArray _rvec, OutputArray _tvec, std::vector<double>& stdDevs, bool useExtrinsicGuess, int flags)
+{
+    CV_INSTRUMENT_REGION()
+
+        Mat opoints = _opoints.getMat(), ipoints = _ipoints.getMat();
+    int npoints = std::max(opoints.checkVector(3, CV_32F), opoints.checkVector(3, CV_64F));
+    CV_Assert(npoints >= 4 && npoints == std::max(ipoints.checkVector(2, CV_32F), ipoints.checkVector(2, CV_64F)));
+
+    Mat rvec, tvec;
+    if (flags != SOLVEPNP_ITERATIVE)
+        useExtrinsicGuess = false;
+
+    if (useExtrinsicGuess)
+    {
+        int rtype = _rvec.type(), ttype = _tvec.type();
+        Size rsize = _rvec.size(), tsize = _tvec.size();
+        CV_Assert((rtype == CV_32F || rtype == CV_64F) &&
+            (ttype == CV_32F || ttype == CV_64F));
+        CV_Assert((rsize == Size(1, 3) || rsize == Size(3, 1)) &&
+            (tsize == Size(1, 3) || tsize == Size(3, 1)));
+    }
+    else
+    {
+        int mtype = CV_64F;
+        // use CV_32F if all PnP inputs are CV_32F and outputs are empty
+        if (_ipoints.depth() == _cameraMatrix.depth() && _ipoints.depth() == _opoints.depth() &&
+            _rvec.empty() && _tvec.empty())
+            mtype = _opoints.depth();
+
+        _rvec.create(3, 1, mtype);
+        _tvec.create(3, 1, mtype);
+    }
+    rvec = _rvec.getMat();
+    tvec = _tvec.getMat();
+
+    Mat cameraMatrix0 = _cameraMatrix.getMat();
+    Mat distCoeffs0 = _distCoeffs.getMat();
+    Mat cameraMatrix = Mat_<double>(cameraMatrix0);
+    Mat distCoeffs = Mat_<double>(distCoeffs0);
+    bool result = false;
+
+    if (flags == SOLVEPNP_EPNP || flags == SOLVEPNP_DLS || flags == SOLVEPNP_UPNP)
+    {
+        Mat undistortedPoints;
+        undistortPoints(ipoints, undistortedPoints, cameraMatrix, distCoeffs);
+        epnp PnP(cameraMatrix, opoints, undistortedPoints);
+
+        Mat R;
+        PnP.compute_pose(R, tvec);
+        Rodrigues(R, rvec);
+        result = true;
+    }
+    else if (flags == SOLVEPNP_P3P)
+    {
+        CV_Assert(npoints == 4);
+        Mat undistortedPoints;
+        undistortPoints(ipoints, undistortedPoints, cameraMatrix, distCoeffs);
+        p3p P3Psolver(cameraMatrix);
+
+        Mat R;
+        result = P3Psolver.solve(R, tvec, opoints, undistortedPoints);
+        if (result)
+            Rodrigues(R, rvec);
+    }
+    else if (flags == SOLVEPNP_AP3P)
+    {
+        CV_Assert(npoints == 4);
+        Mat undistortedPoints;
+        undistortPoints(ipoints, undistortedPoints, cameraMatrix, distCoeffs);
+        ap3p P3Psolver(cameraMatrix);
+
+        Mat R;
+        result = P3Psolver.solve(R, tvec, opoints, undistortedPoints);
+        if (result)
+            Rodrigues(R, rvec);
+    }
+    else if (flags == SOLVEPNP_ITERATIVE)
+    {
+        CvMat c_objectPoints = cvMat(opoints), c_imagePoints = cvMat(ipoints);
+        CvMat c_cameraMatrix = cvMat(cameraMatrix), c_distCoeffs = cvMat(distCoeffs);
+        CvMat c_rvec = cvMat(rvec), c_tvec = cvMat(tvec);
+        stdDevs.clear();
+        cvFindExtrinsicCameraParams2WithErrors(&c_objectPoints, &c_imagePoints, &c_cameraMatrix,
+            (c_distCoeffs.rows && c_distCoeffs.cols) ? &c_distCoeffs : 0,
+            &c_rvec, &c_tvec, stdDevs, useExtrinsicGuess);
+        result = true;
+    }
+    /*else if (flags == SOLVEPNP_DLS)
+    {
+        Mat undistortedPoints;
+        undistortPoints(ipoints, undistortedPoints, cameraMatrix, distCoeffs);
+        dls PnP(opoints, undistortedPoints);
+        Mat R, rvec = _rvec.getMat(), tvec = _tvec.getMat();
+        bool result = PnP.compute_pose(R, tvec);
+        if (result)
+            Rodrigues(R, rvec);
+        return result;
+    }
+    else if (flags == SOLVEPNP_UPNP)
+    {
+        upnp PnP(cameraMatrix, opoints, ipoints);
+        Mat R, rvec = _rvec.getMat(), tvec = _tvec.getMat();
+        PnP.compute_pose(R, tvec);
+        Rodrigues(R, rvec);
+        return true;
+    }*/
+    else
+        CV_Error(CV_StsBadArg, "The flags argument must be one of SOLVEPNP_ITERATIVE, SOLVEPNP_P3P, SOLVEPNP_EPNP or SOLVEPNP_DLS");
+    return result;
+}
+
 class PnPRansacCallback CV_FINAL : public PointSetRegistrator::Callback
 {
 

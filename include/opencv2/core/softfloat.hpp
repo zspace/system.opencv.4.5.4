@@ -44,6 +44,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define softfloat_h 1
 
 #include "cvdef.h"
+#include "stdint.h"
 
 namespace cv
 {

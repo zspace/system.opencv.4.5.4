@@ -190,6 +190,19 @@ void cvFindExtrinsicCameraParams2( const CvMat* object_points,
                                 CvMat* translation_vector,
                                 int use_extrinsic_guess CV_DEFAULT(0) );
 
+/* Finds extrinsic camera parameters from
+   a few known corresponding point pairs and intrinsic parameters
+   in addition the uncertainties in the rotation and translation
+   estimate are provided*/
+CVAPI(void) cvFindExtrinsicCameraParams2WithErrors(const CvMat* object_points,
+                                                   const CvMat* image_points,
+                                                   const CvMat* camera_matrix,
+                                                   const CvMat* distortion_coeffs,
+                                                   CvMat* rotation_vector,
+                                                   CvMat* translation_vector,
+                                                   std::vector<double>& stdDevs,
+                                                   int use_extrinsic_guess CV_DEFAULT(0));
+
 /* Computes initial estimate of the intrinsic camera parameters
    in case of planar calibration target (e.g. chessboard) */
 void cvInitIntrinsicParams2D( const CvMat* object_points,

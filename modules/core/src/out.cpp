@@ -42,7 +42,7 @@
 //M*/
 
 #include "precomp.hpp"
-
+#define snprintf _snprintf
 namespace cv
 {
     class FormattedImpl CV_FINAL : public Formatted

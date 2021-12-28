@@ -1080,6 +1080,11 @@ CV_EXPORTS_W bool solvePnP( InputArray objectPoints, InputArray imagePoints,
                             OutputArray rvec, OutputArray tvec,
                             bool useExtrinsicGuess = false, int flags = SOLVEPNP_ITERATIVE );
 
+CV_EXPORTS_W bool solvePnPWithErrors(InputArray objectPoints, InputArray imagePoints,
+                                     InputArray cameraMatrix, InputArray distCoeffs,
+                                     OutputArray rvec, OutputArray tvec, std::vector<double>& stdDevs,
+                                     bool useExtrinsicGuess = false, int flags = SOLVEPNP_ITERATIVE);
+
 /** @brief Finds an object pose from 3D-2D point correspondences using the RANSAC scheme.
 
 @param objectPoints Array of object points in the object coordinate space, Nx3 1-channel or
@@ -4134,7 +4139,11 @@ optimization. It is the \f$max(width,height)/\pi\f$ or the provided \f$f_x\f$, \
         InputOutputArray K, InputOutputArray D, OutputArrayOfArrays rvecs, OutputArrayOfArrays tvecs, int flags = 0,
             TermCriteria criteria = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 100, DBL_EPSILON));
 
-    /** @brief Stereo rectification for fisheye camera model
+    CV_EXPORTS_W double calibrateWithErrors(InputArrayOfArrays objectPoints, InputArrayOfArrays imagePoints, const Size& image_size,
+                                            InputOutputArray K, InputOutputArray D, OutputArrayOfArrays rvecs, OutputArrayOfArrays tvecs, std::vector<double>& stdDevs, int flags = 0,
+                                            TermCriteria criteria = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 100, DBL_EPSILON));
+
+	/** @brief Stereo rectification for fisheye camera model
 
     @param K1 First camera intrinsic matrix.
     @param D1 First camera distortion parameters.
@@ -4204,6 +4213,11 @@ optimization. It is the \f$max(width,height)/\pi\f$ or the provided \f$f_x\f$, \
                                   InputOutputArray K1, InputOutputArray D1, InputOutputArray K2, InputOutputArray D2, Size imageSize,
                                   OutputArray R, OutputArray T, int flags = fisheye::CALIB_FIX_INTRINSIC,
                                   TermCriteria criteria = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 100, DBL_EPSILON));
+
+    CV_EXPORTS_W double stereoCalibrateWithErrors(InputArrayOfArrays objectPoints, InputArrayOfArrays imagePoints1, InputArrayOfArrays imagePoints2,
+                                                  InputOutputArray K1, InputOutputArray D1, InputOutputArray K2, InputOutputArray D2, Size imageSize,
+                                                  OutputArray R, OutputArray T, std::vector<double>& stdDevs, std::vector<double>& rmsPerStereoPair, int flags = fisheye::CALIB_FIX_INTRINSIC,
+                                                  TermCriteria criteria = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 100, DBL_EPSILON));
 
 //! @} calib3d_fisheye
 } // end namespace fisheye

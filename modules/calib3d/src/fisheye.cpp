@@ -869,6 +869,148 @@ double cv::fisheye::calibrate(InputArrayOfArrays objectPoints, InputArrayOfArray
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// cv::fisheye::calibrateWithErrors
+
+double cv::fisheye::calibrateWithErrors(InputArrayOfArrays objectPoints, InputArrayOfArrays imagePoints, const Size& image_size,
+    InputOutputArray K, InputOutputArray D, OutputArrayOfArrays rvecs, OutputArrayOfArrays tvecs,
+    std::vector<double>& stdDevs, int flags, cv::TermCriteria criteria)
+{
+    CV_INSTRUMENT_REGION()
+
+    CV_Assert(!objectPoints.empty() && !imagePoints.empty() && objectPoints.total() == imagePoints.total());
+    CV_Assert(objectPoints.type() == CV_32FC3 || objectPoints.type() == CV_64FC3);
+    CV_Assert(imagePoints.type() == CV_32FC2 || imagePoints.type() == CV_64FC2);
+    CV_Assert(K.empty() || (K.size() == Size(3, 3)));
+    CV_Assert(D.empty() || (D.total() == 4));
+    CV_Assert(rvecs.empty() || (rvecs.channels() == 3));
+    CV_Assert(tvecs.empty() || (tvecs.channels() == 3));
+
+    CV_Assert((!K.empty() && !D.empty()) || !(flags & CALIB_USE_INTRINSIC_GUESS));
+
+    using namespace cv::internal;
+    //-------------------------------Initialization
+    IntrinsicParams finalParam;
+    IntrinsicParams currentParam;
+    IntrinsicParams errors;
+
+    finalParam.isEstimate[0] = 1;
+    finalParam.isEstimate[1] = 1;
+    finalParam.isEstimate[2] = flags & CALIB_FIX_PRINCIPAL_POINT ? 0 : 1;
+    finalParam.isEstimate[3] = flags & CALIB_FIX_PRINCIPAL_POINT ? 0 : 1;
+    finalParam.isEstimate[4] = flags & CALIB_FIX_SKEW ? 0 : 1;
+    finalParam.isEstimate[5] = flags & CALIB_FIX_K1 ? 0 : 1;
+    finalParam.isEstimate[6] = flags & CALIB_FIX_K2 ? 0 : 1;
+    finalParam.isEstimate[7] = flags & CALIB_FIX_K3 ? 0 : 1;
+    finalParam.isEstimate[8] = flags & CALIB_FIX_K4 ? 0 : 1;
+
+    const int recompute_extrinsic = flags & CALIB_RECOMPUTE_EXTRINSIC ? 1 : 0;
+    const int check_cond = flags & CALIB_CHECK_COND ? 1 : 0;
+
+    const double alpha_smooth = 0.4;
+    const double thresh_cond = 1e6;
+    double change = 1;
+    Vec2d err_std;
+
+    Matx33d _K;
+    Vec4d _D;
+    if (flags & CALIB_USE_INTRINSIC_GUESS)
+    {
+        K.getMat().convertTo(_K, CV_64FC1);
+        D.getMat().convertTo(_D, CV_64FC1);
+        finalParam.Init(Vec2d(_K(0, 0), _K(1, 1)),
+            Vec2d(_K(0, 2), _K(1, 2)),
+            Vec4d(flags & CALIB_FIX_K1 ? 0 : _D[0],
+                flags & CALIB_FIX_K2 ? 0 : _D[1],
+                flags & CALIB_FIX_K3 ? 0 : _D[2],
+                flags & CALIB_FIX_K4 ? 0 : _D[3]),
+            _K(0, 1) / _K(0, 0));
+    }
+    else
+    {
+        finalParam.Init(Vec2d(max(image_size.width, image_size.height) / CV_PI, max(image_size.width, image_size.height) / CV_PI),
+            Vec2d(image_size.width / 2.0 - 0.5, image_size.height / 2.0 - 0.5));
+    }
+
+    errors.isEstimate = finalParam.isEstimate;
+
+    std::vector<Vec3d> omc(objectPoints.total()), Tc(objectPoints.total());
+
+    CalibrateExtrinsics(objectPoints, imagePoints, finalParam, check_cond, thresh_cond, omc, Tc);
+
+
+    //-------------------------------Optimization
+    for (int iter = 0; iter < std::numeric_limits<int>::max(); ++iter)
+    {
+        if ((criteria.type == 1 && iter >= criteria.maxCount) ||
+            (criteria.type == 2 && change <= criteria.epsilon) ||
+            (criteria.type == 3 && (change <= criteria.epsilon || iter >= criteria.maxCount)))
+            break;
+
+        double alpha_smooth2 = 1 - std::pow(1 - alpha_smooth, iter + 1.0);
+
+        Mat JJ2, ex3;
+        ComputeJacobians(objectPoints, imagePoints, finalParam, omc, Tc, check_cond, thresh_cond, JJ2, ex3);
+
+        Mat G;
+        solve(JJ2, ex3, G);
+        currentParam = finalParam + alpha_smooth2 * G;
+
+        change = norm(Vec4d(currentParam.f[0], currentParam.f[1], currentParam.c[0], currentParam.c[1]) -
+            Vec4d(finalParam.f[0], finalParam.f[1], finalParam.c[0], finalParam.c[1]))
+            / norm(Vec4d(currentParam.f[0], currentParam.f[1], currentParam.c[0], currentParam.c[1]));
+
+        finalParam = currentParam;
+
+        if (recompute_extrinsic)
+        {
+            CalibrateExtrinsics(objectPoints, imagePoints, finalParam, check_cond,
+                thresh_cond, omc, Tc);
+        }
+    }
+
+    //-------------------------------Validation
+    double rms;
+    EstimateUncertainties(objectPoints, imagePoints, finalParam, omc, Tc, errors, err_std, thresh_cond,
+        check_cond, rms);
+    stdDevs.clear();
+    stdDevs.push_back(errors.f[0]);
+    stdDevs.push_back(errors.f[1]);
+    stdDevs.push_back(errors.c[0]);
+    stdDevs.push_back(errors.c[1]);
+    stdDevs.push_back(errors.k[0]);
+    stdDevs.push_back(errors.k[1]);
+    stdDevs.push_back(errors.k[2]);
+    stdDevs.push_back(errors.k[3]);
+    //-------------------------------
+    _K = Matx33d(finalParam.f[0], finalParam.f[0] * finalParam.alpha, finalParam.c[0],
+        0, finalParam.f[1], finalParam.c[1],
+        0, 0, 1);
+    if (K.needed()) cv::Mat(_K).convertTo(K, K.empty() ? CV_64FC1 : K.type());
+    if (D.needed()) cv::Mat(finalParam.k).convertTo(D, D.empty() ? CV_64FC1 : D.type());
+    if (rvecs.isMatVector())
+    {
+        int N = (int)objectPoints.total();
+        if (rvecs.empty())
+            rvecs.create(N, 1, CV_64FC3);
+        if (tvecs.empty())
+            tvecs.create(N, 1, CV_64FC3);
+        for (int i = 0; i < N; i++)
+        {
+            rvecs.create(3, 1, CV_64F, i, true);
+            tvecs.create(3, 1, CV_64F, i, true);
+            memcpy(rvecs.getMat(i).ptr(), omc[i].val, sizeof(Vec3d));
+            memcpy(tvecs.getMat(i).ptr(), Tc[i].val, sizeof(Vec3d));
+        }
+    }
+    else
+    {
+        if (rvecs.needed()) cv::Mat(omc).convertTo(rvecs, rvecs.empty() ? CV_64FC3 : rvecs.type());
+        if (tvecs.needed()) cv::Mat(Tc).convertTo(tvecs, tvecs.empty() ? CV_64FC3 : tvecs.type());
+    }
+    return rms;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// cv::fisheye::stereoCalibrate
 
 double cv::fisheye::stereoCalibrate(InputArrayOfArrays objectPoints, InputArrayOfArrays imagePoints1, InputArrayOfArrays imagePoints2,
@@ -1106,6 +1248,266 @@ double cv::fisheye::stereoCalibrate(InputArrayOfArrays objectPoints, InputArrayO
     if (R.needed()) _R.convertTo(R, R.empty() ? CV_64FC1 : R.type());
     if (T.needed()) cv::Mat(Tcur).convertTo(T, T.empty() ? CV_64FC1 : T.type());
 
+    return rms;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// cv::fisheye::stereoCalibrateWithErrors
+
+double cv::fisheye::stereoCalibrateWithErrors(InputArrayOfArrays objectPoints, InputArrayOfArrays imagePoints1, InputArrayOfArrays imagePoints2,
+                                              InputOutputArray K1, InputOutputArray D1, InputOutputArray K2, InputOutputArray D2, Size imageSize,
+                                              OutputArray R, OutputArray T, std::vector<double>& stdDevs, std::vector<double>& rmsPerStereoPair,
+                                              int flags, TermCriteria criteria)
+{
+    CV_INSTRUMENT_REGION()
+
+    CV_Assert(!objectPoints.empty() && !imagePoints1.empty() && !imagePoints2.empty());
+    CV_Assert(objectPoints.total() == imagePoints1.total() || imagePoints1.total() == imagePoints2.total());
+    CV_Assert(objectPoints.type() == CV_32FC3 || objectPoints.type() == CV_64FC3);
+    CV_Assert(imagePoints1.type() == CV_32FC2 || imagePoints1.type() == CV_64FC2);
+    CV_Assert(imagePoints2.type() == CV_32FC2 || imagePoints2.type() == CV_64FC2);
+
+    CV_Assert(K1.empty() || (K1.size() == Size(3, 3)));
+    CV_Assert(D1.empty() || (D1.total() == 4));
+    CV_Assert(K2.empty() || (K1.size() == Size(3, 3)));
+    CV_Assert(D2.empty() || (D1.total() == 4));
+
+    CV_Assert((!K1.empty() && !K2.empty() && !D1.empty() && !D2.empty()) || !(flags & CALIB_FIX_INTRINSIC));
+
+    //-------------------------------Initialization
+
+    const int threshold = 50;
+    const double thresh_cond = 1e6;
+    const int check_cond = 1;
+
+    int n_points = (int)objectPoints.getMat(0).total();
+    int n_images = (int)objectPoints.total();
+
+    double change = 1;
+
+    cv::internal::IntrinsicParams intrinsicLeft;
+    cv::internal::IntrinsicParams intrinsicRight;
+
+    cv::internal::IntrinsicParams intrinsicLeft_errors;
+    cv::internal::IntrinsicParams intrinsicRight_errors;
+
+    Matx33d _K1, _K2;
+    Vec4d _D1, _D2;
+    if (!K1.empty()) K1.getMat().convertTo(_K1, CV_64FC1);
+    if (!D1.empty()) D1.getMat().convertTo(_D1, CV_64FC1);
+    if (!K2.empty()) K2.getMat().convertTo(_K2, CV_64FC1);
+    if (!D2.empty()) D2.getMat().convertTo(_D2, CV_64FC1);
+
+    std::vector<Vec3d> rvecs1(n_images), tvecs1(n_images), rvecs2(n_images), tvecs2(n_images);
+
+    if (!(flags & CALIB_FIX_INTRINSIC))
+    {
+        calibrate(objectPoints, imagePoints1, imageSize, _K1, _D1, rvecs1, tvecs1, flags, TermCriteria(3, 20, 1e-6));
+        calibrate(objectPoints, imagePoints2, imageSize, _K2, _D2, rvecs2, tvecs2, flags, TermCriteria(3, 20, 1e-6));
+    }
+
+    intrinsicLeft.Init(Vec2d(_K1(0, 0), _K1(1, 1)), Vec2d(_K1(0, 2), _K1(1, 2)),
+        Vec4d(_D1[0], _D1[1], _D1[2], _D1[3]), _K1(0, 1) / _K1(0, 0));
+
+    intrinsicRight.Init(Vec2d(_K2(0, 0), _K2(1, 1)), Vec2d(_K2(0, 2), _K2(1, 2)),
+        Vec4d(_D2[0], _D2[1], _D2[2], _D2[3]), _K2(0, 1) / _K2(0, 0));
+
+    if ((flags & CALIB_FIX_INTRINSIC))
+    {
+        cv::internal::CalibrateExtrinsics(objectPoints, imagePoints1, intrinsicLeft, check_cond, thresh_cond, rvecs1, tvecs1);
+        cv::internal::CalibrateExtrinsics(objectPoints, imagePoints2, intrinsicRight, check_cond, thresh_cond, rvecs2, tvecs2);
+    }
+
+    intrinsicLeft.isEstimate[0] = flags & CALIB_FIX_INTRINSIC ? 0 : 1;
+    intrinsicLeft.isEstimate[1] = flags & CALIB_FIX_INTRINSIC ? 0 : 1;
+    intrinsicLeft.isEstimate[2] = flags & CALIB_FIX_INTRINSIC ? 0 : 1;
+    intrinsicLeft.isEstimate[3] = flags & CALIB_FIX_INTRINSIC ? 0 : 1;
+    intrinsicLeft.isEstimate[4] = flags & (CALIB_FIX_SKEW | CALIB_FIX_INTRINSIC) ? 0 : 1;
+    intrinsicLeft.isEstimate[5] = flags & (CALIB_FIX_K1 | CALIB_FIX_INTRINSIC) ? 0 : 1;
+    intrinsicLeft.isEstimate[6] = flags & (CALIB_FIX_K2 | CALIB_FIX_INTRINSIC) ? 0 : 1;
+    intrinsicLeft.isEstimate[7] = flags & (CALIB_FIX_K3 | CALIB_FIX_INTRINSIC) ? 0 : 1;
+    intrinsicLeft.isEstimate[8] = flags & (CALIB_FIX_K4 | CALIB_FIX_INTRINSIC) ? 0 : 1;
+
+    intrinsicRight.isEstimate[0] = flags & CALIB_FIX_INTRINSIC ? 0 : 1;
+    intrinsicRight.isEstimate[1] = flags & CALIB_FIX_INTRINSIC ? 0 : 1;
+    intrinsicRight.isEstimate[2] = flags & CALIB_FIX_INTRINSIC ? 0 : 1;
+    intrinsicRight.isEstimate[3] = flags & CALIB_FIX_INTRINSIC ? 0 : 1;
+    intrinsicRight.isEstimate[4] = flags & (CALIB_FIX_SKEW | CALIB_FIX_INTRINSIC) ? 0 : 1;
+    intrinsicRight.isEstimate[5] = flags & (CALIB_FIX_K1 | CALIB_FIX_INTRINSIC) ? 0 : 1;
+    intrinsicRight.isEstimate[6] = flags & (CALIB_FIX_K2 | CALIB_FIX_INTRINSIC) ? 0 : 1;
+    intrinsicRight.isEstimate[7] = flags & (CALIB_FIX_K3 | CALIB_FIX_INTRINSIC) ? 0 : 1;
+    intrinsicRight.isEstimate[8] = flags & (CALIB_FIX_K4 | CALIB_FIX_INTRINSIC) ? 0 : 1;
+
+    intrinsicLeft_errors.isEstimate = intrinsicLeft.isEstimate;
+    intrinsicRight_errors.isEstimate = intrinsicRight.isEstimate;
+
+    std::vector<uchar> selectedParams;
+    std::vector<int> tmp(6 * (n_images + 1), 1);
+    selectedParams.insert(selectedParams.end(), intrinsicLeft.isEstimate.begin(), intrinsicLeft.isEstimate.end());
+    selectedParams.insert(selectedParams.end(), intrinsicRight.isEstimate.begin(), intrinsicRight.isEstimate.end());
+    selectedParams.insert(selectedParams.end(), tmp.begin(), tmp.end());
+
+    //Init values for rotation and translation between two views
+    cv::Mat om_list(1, n_images, CV_64FC3), T_list(1, n_images, CV_64FC3);
+    cv::Mat om_ref, R_ref, T_ref, R1, R2;
+    for (int image_idx = 0; image_idx < n_images; ++image_idx)
+    {
+        cv::Rodrigues(rvecs1[image_idx], R1);
+        cv::Rodrigues(rvecs2[image_idx], R2);
+        R_ref = R2 * R1.t();
+        T_ref = cv::Mat(tvecs2[image_idx]) - R_ref * cv::Mat(tvecs1[image_idx]);
+        cv::Rodrigues(R_ref, om_ref);
+        om_ref.reshape(3, 1).copyTo(om_list.col(image_idx));
+        T_ref.reshape(3, 1).copyTo(T_list.col(image_idx));
+    }
+    cv::Vec3d omcur = cv::internal::median3d(om_list);
+    cv::Vec3d Tcur = cv::internal::median3d(T_list);
+
+    cv::Mat J = cv::Mat::zeros(4 * n_points * n_images, 18 + 6 * (n_images + 1), CV_64FC1),
+        e = cv::Mat::zeros(4 * n_points * n_images, 1, CV_64FC1), Jkk, ekk;
+
+    for (int iter = 0; ; ++iter)
+    {
+        if ((criteria.type == 1 && iter >= criteria.maxCount) ||
+            (criteria.type == 2 && change <= criteria.epsilon) ||
+            (criteria.type == 3 && (change <= criteria.epsilon || iter >= criteria.maxCount)))
+            break;
+
+        J.create(4 * n_points * n_images, 18 + 6 * (n_images + 1), CV_64FC1);
+        e.create(4 * n_points * n_images, 1, CV_64FC1);
+        Jkk.create(4 * n_points, 18 + 6 * (n_images + 1), CV_64FC1);
+        ekk.create(4 * n_points, 1, CV_64FC1);
+
+        cv::Mat omr, Tr, domrdomckk, domrdTckk, domrdom, domrdT, dTrdomckk, dTrdTckk, dTrdom, dTrdT;
+
+        for (int image_idx = 0; image_idx < n_images; ++image_idx)
+        {
+            Jkk = cv::Mat::zeros(4 * n_points, 18 + 6 * (n_images + 1), CV_64FC1);
+
+            cv::Mat object = objectPoints.getMat(image_idx).clone();
+            cv::Mat imageLeft = imagePoints1.getMat(image_idx).clone();
+            cv::Mat imageRight = imagePoints2.getMat(image_idx).clone();
+            cv::Mat jacobians, projected;
+
+            //left camera jacobian
+            cv::Mat rvec = cv::Mat(rvecs1[image_idx]);
+            cv::Mat tvec = cv::Mat(tvecs1[image_idx]);
+            cv::internal::projectPoints(object, projected, rvec, tvec, intrinsicLeft, jacobians);
+            cv::Mat(cv::Mat((imageLeft - projected).t()).reshape(1, 1).t()).copyTo(ekk.rowRange(0, 2 * n_points));
+            jacobians.colRange(8, 11).copyTo(Jkk.colRange(24 + image_idx * 6, 27 + image_idx * 6).rowRange(0, 2 * n_points));
+            jacobians.colRange(11, 14).copyTo(Jkk.colRange(27 + image_idx * 6, 30 + image_idx * 6).rowRange(0, 2 * n_points));
+            jacobians.colRange(0, 2).copyTo(Jkk.colRange(0, 2).rowRange(0, 2 * n_points));
+            jacobians.colRange(2, 4).copyTo(Jkk.colRange(2, 4).rowRange(0, 2 * n_points));
+            jacobians.colRange(4, 8).copyTo(Jkk.colRange(5, 9).rowRange(0, 2 * n_points));
+            jacobians.col(14).copyTo(Jkk.col(4).rowRange(0, 2 * n_points));
+
+            //right camera jacobian
+            cv::internal::compose_motion(rvec, tvec, omcur, Tcur, omr, Tr, domrdomckk, domrdTckk, domrdom, domrdT, dTrdomckk, dTrdTckk, dTrdom, dTrdT);
+            rvec = cv::Mat(rvecs2[image_idx]);
+            tvec = cv::Mat(tvecs2[image_idx]);
+
+            cv::internal::projectPoints(object, projected, omr, Tr, intrinsicRight, jacobians);
+            cv::Mat(cv::Mat((imageRight - projected).t()).reshape(1, 1).t()).copyTo(ekk.rowRange(2 * n_points, 4 * n_points));
+            cv::Mat dxrdom = jacobians.colRange(8, 11) * domrdom + jacobians.colRange(11, 14) * dTrdom;
+            cv::Mat dxrdT = jacobians.colRange(8, 11) * domrdT + jacobians.colRange(11, 14)* dTrdT;
+            cv::Mat dxrdomckk = jacobians.colRange(8, 11) * domrdomckk + jacobians.colRange(11, 14) * dTrdomckk;
+            cv::Mat dxrdTckk = jacobians.colRange(8, 11) * domrdTckk + jacobians.colRange(11, 14) * dTrdTckk;
+
+            dxrdom.copyTo(Jkk.colRange(18, 21).rowRange(2 * n_points, 4 * n_points));
+            dxrdT.copyTo(Jkk.colRange(21, 24).rowRange(2 * n_points, 4 * n_points));
+            dxrdomckk.copyTo(Jkk.colRange(24 + image_idx * 6, 27 + image_idx * 6).rowRange(2 * n_points, 4 * n_points));
+            dxrdTckk.copyTo(Jkk.colRange(27 + image_idx * 6, 30 + image_idx * 6).rowRange(2 * n_points, 4 * n_points));
+            jacobians.colRange(0, 2).copyTo(Jkk.colRange(9 + 0, 9 + 2).rowRange(2 * n_points, 4 * n_points));
+            jacobians.colRange(2, 4).copyTo(Jkk.colRange(9 + 2, 9 + 4).rowRange(2 * n_points, 4 * n_points));
+            jacobians.colRange(4, 8).copyTo(Jkk.colRange(9 + 5, 9 + 9).rowRange(2 * n_points, 4 * n_points));
+            jacobians.col(14).copyTo(Jkk.col(9 + 4).rowRange(2 * n_points, 4 * n_points));
+
+            //check goodness of sterepair
+            double abs_max = 0;
+            for (int i = 0; i < 4 * n_points; i++)
+            {
+                if (fabs(ekk.at<double>(i)) > abs_max)
+                {
+                    abs_max = fabs(ekk.at<double>(i));
+                }
+            }
+
+            CV_Assert(abs_max < threshold); // bad stereo pair
+
+            Jkk.copyTo(J.rowRange(image_idx * 4 * n_points, (image_idx + 1) * 4 * n_points));
+            ekk.copyTo(e.rowRange(image_idx * 4 * n_points, (image_idx + 1) * 4 * n_points));
+        }
+
+        cv::Vec6d oldTom(Tcur[0], Tcur[1], Tcur[2], omcur[0], omcur[1], omcur[2]);
+
+        //update all parameters
+        cv::subMatrix(J, J, selectedParams, std::vector<uchar>(J.rows, 1));
+        int a = cv::countNonZero(intrinsicLeft.isEstimate);
+        int b = cv::countNonZero(intrinsicRight.isEstimate);
+        cv::Mat deltas;
+        solve(J.t() * J, J.t()*e, deltas);
+        if (a > 0)
+            intrinsicLeft = intrinsicLeft + deltas.rowRange(0, a);
+        if (b > 0)
+            intrinsicRight = intrinsicRight + deltas.rowRange(a, a + b);
+        omcur = omcur + cv::Vec3d(deltas.rowRange(a + b, a + b + 3));
+        Tcur = Tcur + cv::Vec3d(deltas.rowRange(a + b + 3, a + b + 6));
+        for (int image_idx = 0; image_idx < n_images; ++image_idx)
+        {
+            rvecs1[image_idx] = cv::Mat(cv::Mat(rvecs1[image_idx]) + deltas.rowRange(a + b + 6 + image_idx * 6, a + b + 9 + image_idx * 6));
+            tvecs1[image_idx] = cv::Mat(cv::Mat(tvecs1[image_idx]) + deltas.rowRange(a + b + 9 + image_idx * 6, a + b + 12 + image_idx * 6));
+        }
+
+        cv::Vec6d newTom(Tcur[0], Tcur[1], Tcur[2], omcur[0], omcur[1], omcur[2]);
+        change = cv::norm(newTom - oldTom) / cv::norm(newTom);
+    }
+
+    Vec<double, 1> sigma_x;
+    meanStdDev(e, noArray(), sigma_x);
+    cv::Mat J2 = J.t() * J;
+    sqrt(J2.inv(), J2);
+    cv::Mat errors = sigma_x(0) * J2.diag();
+
+    stdDevs.clear();
+    for (int errIndx = 0; errIndx < errors.rows; errIndx++) {
+        stdDevs.push_back(errors.at<double>(errIndx, 0));
+    }
+
+    rmsPerStereoPair.resize(n_images, 0.);
+    int points_per_image_pair = n_points * 2;
+    int pair_index = 0; 
+    double rms = 0;
+    const Vec2d* ptr_e = e.ptr<Vec2d>();
+    for (size_t i = 0; i < e.total() / 2; i++)
+    {
+        rms += ptr_e[i][0] * ptr_e[i][0] + ptr_e[i][1] * ptr_e[i][1];
+
+        rmsPerStereoPair[pair_index] += ptr_e[i][0] * ptr_e[i][0] + ptr_e[i][1] * ptr_e[i][1];
+        if (((int)i + 1) % points_per_image_pair == 0) {
+            rmsPerStereoPair[pair_index] /= ((double)points_per_image_pair);
+            rmsPerStereoPair[pair_index] = sqrt(rmsPerStereoPair[pair_index]);
+            pair_index++;
+        }
+    }
+
+    rms /= ((double)e.total() / 2.0);
+    rms = sqrt(rms);
+
+
+    _K1 = Matx33d(intrinsicLeft.f[0], intrinsicLeft.f[0] * intrinsicLeft.alpha, intrinsicLeft.c[0],
+        0, intrinsicLeft.f[1], intrinsicLeft.c[1],
+        0, 0, 1);
+    _K2 = Matx33d(intrinsicRight.f[0], intrinsicRight.f[0] * intrinsicRight.alpha, intrinsicRight.c[0],
+        0, intrinsicRight.f[1], intrinsicRight.c[1],
+        0, 0, 1);
+    Mat _R;
+    Rodrigues(omcur, _R);
+    if (K1.needed()) cv::Mat(_K1).convertTo(K1, K1.empty() ? CV_64FC1 : K1.type());
+    if (K2.needed()) cv::Mat(_K2).convertTo(K2, K2.empty() ? CV_64FC1 : K2.type());
+    if (D1.needed()) cv::Mat(intrinsicLeft.k).convertTo(D1, D1.empty() ? CV_64FC1 : D1.type());
+    if (D2.needed()) cv::Mat(intrinsicRight.k).convertTo(D2, D2.empty() ? CV_64FC1 : D2.type());
+    if (R.needed()) _R.convertTo(R, R.empty() ? CV_64FC1 : R.type());
+    if (T.needed()) cv::Mat(Tcur).convertTo(T, T.empty() ? CV_64FC1 : T.type());
     return rms;
 }
 
@@ -1562,7 +1964,8 @@ void cv::internal::EstimateUncertainties(InputArrayOfArrays objectPoints, InputA
 
     sqrt(JJ2.inv(), JJ2);
 
-    errors = 3 * sigma_x(0) * JJ2.diag();
+    // Just want one times the standard deviations for uncertainty
+    errors = sigma_x(0) * JJ2.diag();
     rms = sqrt(norm(ex, NORM_L2SQR)/ex.total());
 }
 

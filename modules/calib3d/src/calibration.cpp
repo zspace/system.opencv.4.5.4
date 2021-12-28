@@ -1260,6 +1260,234 @@ CV_IMPL void cvFindExtrinsicCameraParams2( const CvMat* objectPoints,
     cvConvert( &_t, tvec );
 }
 
+CV_IMPL void cvFindExtrinsicCameraParams2WithErrors(const CvMat* objectPoints,
+                                                    const CvMat* imagePoints, const CvMat* A,
+                                                    const CvMat* distCoeffs, CvMat* rvec, CvMat* tvec, std::vector<double>& stdDevs,
+                                                    int useExtrinsicGuess)
+{
+    const int max_iter = 20;
+    Ptr<CvMat> matM, _Mxy, _m, _mn, matL;
+
+    int i, count;
+    double a[9], ar[9] = { 1,0,0,0,1,0,0,0,1 }, R[9];
+    double MM[9], U[9], V[9], W[3];
+    CvScalar Mc;
+    double param[6];
+    CvMat matA = cvMat(3, 3, CV_64F, a);
+    CvMat _Ar = cvMat(3, 3, CV_64F, ar);
+    CvMat matR = cvMat(3, 3, CV_64F, R);
+    CvMat _r = cvMat(3, 1, CV_64F, param);
+    CvMat _t = cvMat(3, 1, CV_64F, param + 3);
+    CvMat _Mc = cvMat(1, 3, CV_64F, Mc.val);
+    CvMat _MM = cvMat(3, 3, CV_64F, MM);
+    CvMat matU = cvMat(3, 3, CV_64F, U);
+    CvMat matV = cvMat(3, 3, CV_64F, V);
+    CvMat matW = cvMat(3, 1, CV_64F, W);
+    CvMat _param = cvMat(6, 1, CV_64F, param);
+    CvMat _dpdr, _dpdt;
+
+    CV_Assert(CV_IS_MAT(objectPoints) && CV_IS_MAT(imagePoints) &&
+        CV_IS_MAT(A) && CV_IS_MAT(rvec) && CV_IS_MAT(tvec));
+
+    count = MAX(objectPoints->cols, objectPoints->rows);
+    matM.reset(cvCreateMat(1, count, CV_64FC3));
+    _m.reset(cvCreateMat(1, count, CV_64FC2));
+
+    cvConvertPointsHomogeneous(objectPoints, matM);
+    cvConvertPointsHomogeneous(imagePoints, _m);
+    cvConvert(A, &matA);
+
+    CV_Assert((CV_MAT_DEPTH(rvec->type) == CV_64F || CV_MAT_DEPTH(rvec->type) == CV_32F) &&
+        (rvec->rows == 1 || rvec->cols == 1) && rvec->rows*rvec->cols*CV_MAT_CN(rvec->type) == 3);
+
+    CV_Assert((CV_MAT_DEPTH(tvec->type) == CV_64F || CV_MAT_DEPTH(tvec->type) == CV_32F) &&
+        (tvec->rows == 1 || tvec->cols == 1) && tvec->rows*tvec->cols*CV_MAT_CN(tvec->type) == 3);
+
+    _mn.reset(cvCreateMat(1, count, CV_64FC2));
+    _Mxy.reset(cvCreateMat(1, count, CV_64FC2));
+
+    // normalize image points
+    // (unapply the intrinsic matrix transformation and distortion)
+    cvUndistortPoints(_m, _mn, &matA, distCoeffs, 0, &_Ar);
+
+    if (useExtrinsicGuess)
+    {
+        CvMat _r_temp = cvMat(rvec->rows, rvec->cols,
+            CV_MAKETYPE(CV_64F, CV_MAT_CN(rvec->type)), param);
+        CvMat _t_temp = cvMat(tvec->rows, tvec->cols,
+            CV_MAKETYPE(CV_64F, CV_MAT_CN(tvec->type)), param + 3);
+        cvConvert(rvec, &_r_temp);
+        cvConvert(tvec, &_t_temp);
+    }
+    else
+    {
+        Mc = cvAvg(matM);
+        cvReshape(matM, matM, 1, count);
+        cvMulTransposed(matM, &_MM, 1, &_Mc);
+        cvSVD(&_MM, &matW, 0, &matV, CV_SVD_MODIFY_A + CV_SVD_V_T);
+
+        // initialize extrinsic parameters
+        if (W[2] / W[1] < 1e-3 || count < 4)
+        {
+            // a planar structure case (all M's lie in the same plane)
+            double tt[3], h[9], h1_norm, h2_norm;
+            CvMat* R_transform = &matV;
+            CvMat T_transform = cvMat(3, 1, CV_64F, tt);
+            CvMat matH = cvMat(3, 3, CV_64F, h);
+            CvMat _h1, _h2, _h3;
+
+            if (V[2] * V[2] + V[5] * V[5] < 1e-10)
+                cvSetIdentity(R_transform);
+
+            if (cvDet(R_transform) < 0)
+                cvScale(R_transform, R_transform, -1);
+
+            cvGEMM(R_transform, &_Mc, -1, 0, 0, &T_transform, CV_GEMM_B_T);
+
+            for (i = 0; i < count; i++)
+            {
+                const double* Rp = R_transform->data.db;
+                const double* Tp = T_transform.data.db;
+                const double* src = matM->data.db + i * 3;
+                double* dst = _Mxy->data.db + i * 2;
+
+                dst[0] = Rp[0] * src[0] + Rp[1] * src[1] + Rp[2] * src[2] + Tp[0];
+                dst[1] = Rp[3] * src[0] + Rp[4] * src[1] + Rp[5] * src[2] + Tp[1];
+            }
+
+            cvFindHomography(_Mxy, _mn, &matH);
+
+            if (cvCheckArr(&matH, CV_CHECK_QUIET))
+            {
+                cvGetCol(&matH, &_h1, 0);
+                _h2 = _h1; _h2.data.db++;
+                _h3 = _h2; _h3.data.db++;
+                h1_norm = std::sqrt(h[0] * h[0] + h[3] * h[3] + h[6] * h[6]);
+                h2_norm = std::sqrt(h[1] * h[1] + h[4] * h[4] + h[7] * h[7]);
+
+                cvScale(&_h1, &_h1, 1. / MAX(h1_norm, DBL_EPSILON));
+                cvScale(&_h2, &_h2, 1. / MAX(h2_norm, DBL_EPSILON));
+                cvScale(&_h3, &_t, 2. / MAX(h1_norm + h2_norm, DBL_EPSILON));
+                cvCrossProduct(&_h1, &_h2, &_h3);
+
+                cvRodrigues2(&matH, &_r);
+                cvRodrigues2(&_r, &matH);
+                cvMatMulAdd(&matH, &T_transform, &_t, &_t);
+                cvMatMul(&matH, R_transform, &matR);
+            }
+            else
+            {
+                cvSetIdentity(&matR);
+                cvZero(&_t);
+            }
+
+            cvRodrigues2(&matR, &_r);
+        }
+        else
+        {
+            // non-planar structure. Use DLT method
+            double* L;
+            double LL[12 * 12], LW[12], LV[12 * 12], sc;
+            CvMat _LL = cvMat(12, 12, CV_64F, LL);
+            CvMat _LW = cvMat(12, 1, CV_64F, LW);
+            CvMat _LV = cvMat(12, 12, CV_64F, LV);
+            CvMat _RRt, _RR, _tt;
+            CvPoint3D64f* M = (CvPoint3D64f*)matM->data.db;
+            CvPoint2D64f* mn = (CvPoint2D64f*)_mn->data.db;
+
+            matL.reset(cvCreateMat(2 * count, 12, CV_64F));
+            L = matL->data.db;
+
+            for (i = 0; i < count; i++, L += 24)
+            {
+                double x = -mn[i].x, y = -mn[i].y;
+                L[0] = L[16] = M[i].x;
+                L[1] = L[17] = M[i].y;
+                L[2] = L[18] = M[i].z;
+                L[3] = L[19] = 1.;
+                L[4] = L[5] = L[6] = L[7] = 0.;
+                L[12] = L[13] = L[14] = L[15] = 0.;
+                L[8] = x * M[i].x;
+                L[9] = x * M[i].y;
+                L[10] = x * M[i].z;
+                L[11] = x;
+                L[20] = y * M[i].x;
+                L[21] = y * M[i].y;
+                L[22] = y * M[i].z;
+                L[23] = y;
+            }
+
+            cvMulTransposed(matL, &_LL, 1);
+            cvSVD(&_LL, &_LW, 0, &_LV, CV_SVD_MODIFY_A + CV_SVD_V_T);
+            _RRt = cvMat(3, 4, CV_64F, LV + 11 * 12);
+            cvGetCols(&_RRt, &_RR, 0, 3);
+            cvGetCol(&_RRt, &_tt, 3);
+            if (cvDet(&_RR) < 0)
+                cvScale(&_RRt, &_RRt, -1);
+            sc = cvNorm(&_RR);
+            cvSVD(&_RR, &matW, &matU, &matV, CV_SVD_MODIFY_A + CV_SVD_U_T + CV_SVD_V_T);
+            cvGEMM(&matU, &matV, 1, 0, 0, &matR, CV_GEMM_A_T);
+            cvScale(&_tt, &_t, cvNorm(&matR) / sc);
+            cvRodrigues2(&matR, &_r);
+        }
+    }
+
+    cvReshape(matM, matM, 3, 1);
+    cvReshape(_mn, _mn, 2, 1);
+
+    // refine extrinsic parameters using iterative algorithm
+    CvLevMarq solver(6, count * 2, cvTermCriteria(CV_TERMCRIT_EPS + CV_TERMCRIT_ITER, max_iter, FLT_EPSILON), true);
+    cvCopy(&_param, solver.param);
+
+    cv::Mat ex;
+    for (;;)
+    {
+        CvMat *matJ = 0, *_err = 0;
+        const CvMat *__param = 0;
+        bool proceed = solver.update(__param, matJ, _err);
+        cvCopy(__param, &_param);
+        if (!proceed || !_err)
+            break;
+        cvReshape(_err, _err, 2, 1);
+        if (matJ)
+        {
+            cvGetCols(matJ, &_dpdr, 0, 3);
+            cvGetCols(matJ, &_dpdt, 3, 6);
+            cvProjectPoints2(matM, &_r, &_t, &matA, distCoeffs,
+                _err, &_dpdr, &_dpdt, 0, 0, 0);
+        }
+        else
+        {
+            cvProjectPoints2(matM, &_r, &_t, &matA, distCoeffs,
+                _err, 0, 0, 0, 0, 0);
+        }
+        cvSub(_err, _m, _err);
+        cvReshape(_err, _err, 1, 2 * count);
+
+        ex = cvarrToMat(_err);
+    }
+    cvCopy(solver.param, &_param);
+
+    Vec<double, 1> sigma_x;
+    meanStdDev(ex.reshape(1, 1), noArray(), sigma_x);
+    cv::Mat JtJ = cvarrToMat(solver.JtJ);
+    sqrt(JtJ.inv(), JtJ);
+    cv::Mat errors = sigma_x(0) * JtJ.diag();
+
+    stdDevs.clear();
+    for (int errIndx = 0; errIndx < errors.rows; errIndx++) {
+        stdDevs.push_back(errors.at<double>(errIndx, 0));
+    }
+
+    _r = cvMat(rvec->rows, rvec->cols,
+        CV_MAKETYPE(CV_64F, CV_MAT_CN(rvec->type)), param);
+    _t = cvMat(tvec->rows, tvec->cols,
+        CV_MAKETYPE(CV_64F, CV_MAT_CN(tvec->type)), param + 3);
+
+    cvConvert(&_r, rvec);
+    cvConvert(&_t, tvec);
+}
+
 CV_IMPL void cvInitIntrinsicParams2D( const CvMat* objectPoints,
                          const CvMat* imagePoints, const CvMat* npoints,
                          CvSize imageSize, CvMat* cameraMatrix,

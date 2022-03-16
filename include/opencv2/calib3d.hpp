@@ -441,8 +441,7 @@ namespace cv
 //! @{
 
 //! type of the robust estimation algorithm
-    enum {
-        LMEDS = 4,  //!< least-median of squares algorithm
+enum { LMEDS  = 4,  //!< least-median of squares algorithm
        RANSAC = 8,  //!< RANSAC algorithm
        RHO    = 16, //!< RHO algorithm
        USAC_DEFAULT  = 32, //!< USAC algorithm, default settings
@@ -478,8 +477,7 @@ enum SolvePnPMethod {
 #endif
 };
 
-    enum {
-        CALIB_CB_ADAPTIVE_THRESH = 1,
+enum { CALIB_CB_ADAPTIVE_THRESH = 1,
        CALIB_CB_NORMALIZE_IMAGE = 2,
        CALIB_CB_FILTER_QUADS    = 4,
        CALIB_CB_FAST_CHECK      = 8,
@@ -489,14 +487,12 @@ enum SolvePnPMethod {
        CALIB_CB_MARKER          = 128
      };
 
-    enum {
-        CALIB_CB_SYMMETRIC_GRID = 1,
+enum { CALIB_CB_SYMMETRIC_GRID  = 1,
        CALIB_CB_ASYMMETRIC_GRID = 2,
        CALIB_CB_CLUSTERING      = 4
      };
 
-    enum {
-        CALIB_NINTRINSIC = 18,
+enum { CALIB_NINTRINSIC          = 18,
        CALIB_USE_INTRINSIC_GUESS = 0x00001,
        CALIB_FIX_ASPECT_RATIO    = 0x00002,
        CALIB_FIX_PRINCIPAL_POINT = 0x00004,
@@ -525,8 +521,7 @@ enum SolvePnPMethod {
      };
 
 //! the algorithm for finding fundamental matrix
-    enum {
-        FM_7POINT = 1, //!< 7-point algorithm
+enum { FM_7POINT = 1, //!< 7-point algorithm
        FM_8POINT = 2, //!< 8-point algorithm
        FM_LMEDS  = 4, //!< least-median algorithm. 7-point algorithm is used.
        FM_RANSAC = 8  //!< RANSAC algorithm. It needs at least 15 points. 7-point algorithm is used.
@@ -547,14 +542,10 @@ enum RobotWorldHandEyeCalibrationMethod
     CALIB_ROBOT_WORLD_HAND_EYE_LI   = 1  //!< Simultaneous robot-world and hand-eye calibration using dual-quaternions and kronecker product @cite Li2010SimultaneousRA
 };
 
-    enum SamplingMethod {
-        SAMPLING_UNIFORM, SAMPLING_PROGRESSIVE_NAPSAC, SAMPLING_NAPSAC,
-        SAMPLING_PROSAC
-    };
-    enum LocalOptimMethod {
-        LOCAL_OPTIM_NULL, LOCAL_OPTIM_INNER_LO, LOCAL_OPTIM_INNER_AND_ITER_LO,
-        LOCAL_OPTIM_GC, LOCAL_OPTIM_SIGMA
-    };
+enum SamplingMethod { SAMPLING_UNIFORM, SAMPLING_PROGRESSIVE_NAPSAC, SAMPLING_NAPSAC,
+        SAMPLING_PROSAC };
+enum LocalOptimMethod {LOCAL_OPTIM_NULL, LOCAL_OPTIM_INNER_LO, LOCAL_OPTIM_INNER_AND_ITER_LO,
+        LOCAL_OPTIM_GC, LOCAL_OPTIM_SIGMA};
 enum ScoreMethod {SCORE_METHOD_RANSAC, SCORE_METHOD_MSAC, SCORE_METHOD_MAGSAC, SCORE_METHOD_LMEDS};
 enum NeighborSearchMethod { NEIGH_FLANN_KNN, NEIGH_GRID, NEIGH_FLANN_RADIUS };
 
@@ -3517,8 +3508,7 @@ CV_EXPORTS_W void filterHomographyDecompByVisibleRefpoints(InputArrayOfArrays ro
 class CV_EXPORTS_W StereoMatcher : public Algorithm
 {
 public:
-        enum {
-            DISP_SHIFT = 4,
+    enum { DISP_SHIFT = 4,
            DISP_SCALE = (1 << DISP_SHIFT)
          };
 
@@ -3559,8 +3549,7 @@ contributed to OpenCV by K. Konolige.
 class CV_EXPORTS_W StereoBM : public StereoMatcher
 {
 public:
-        enum {
-            PREFILTER_NORMALIZED_RESPONSE = 0,
+    enum { PREFILTER_NORMALIZED_RESPONSE = 0,
            PREFILTER_XSOBEL              = 1
          };
 
@@ -4220,18 +4209,14 @@ optimization. It is the \f$max(width,height)/\pi\f$ or the provided \f$f_x\f$, \
     zero.
     @param criteria Termination criteria for the iterative optimization algorithm.
      */
-        static int bad_index_init = -1;
     CV_EXPORTS_W double stereoCalibrate(InputArrayOfArrays objectPoints, InputArrayOfArrays imagePoints1, InputArrayOfArrays imagePoints2,
                                   InputOutputArray K1, InputOutputArray D1, InputOutputArray K2, InputOutputArray D2, Size imageSize,
                                   OutputArray R, OutputArray T, int flags = fisheye::CALIB_FIX_INTRINSIC,
-            int& bad_stereo_pair_index = bad_index_init,
                                   TermCriteria criteria = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 100, DBL_EPSILON));
 
-        static int bad_index_init2 = -1;
     CV_EXPORTS_W double stereoCalibrateWithErrors(InputArrayOfArrays objectPoints, InputArrayOfArrays imagePoints1, InputArrayOfArrays imagePoints2,
                                                   InputOutputArray K1, InputOutputArray D1, InputOutputArray K2, InputOutputArray D2, Size imageSize,
                                                   OutputArray R, OutputArray T, std::vector<double>& stdDevs, std::vector<double>& rmsPerStereoPair, int flags = fisheye::CALIB_FIX_INTRINSIC,
-            int& bad_stereo_pair_index = bad_index_init2,
                                                   TermCriteria criteria = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 100, DBL_EPSILON));
 
 //! @} calib3d_fisheye

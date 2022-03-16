@@ -44,8 +44,7 @@
 #include "fisheye.hpp"
 #include <limits>
 
-namespace cv {
-    namespace
+namespace cv { namespace
 {
     struct JacobianRow
     {
@@ -56,8 +55,7 @@ namespace cv {
     };
 
     void subMatrix(const Mat& src, Mat& dst, const std::vector<uchar>& cols, const std::vector<uchar>& rows);
-    }
-}
+}}
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// cv::fisheye::projectPoints
@@ -795,10 +793,6 @@ double cv::fisheye::calibrate(InputArrayOfArrays objectPoints, InputArrayOfArray
 
     CalibrateExtrinsics(objectPoints, imagePoints, finalParam, check_cond, thresh_cond, omc, Tc);
 
-    double lambda = 1.0;
-    const double nu = 1.414213562; // sqrt(2), chosen by experiment
-    double prev_rms;
-    EstimateUncertainties(objectPoints, imagePoints, finalParam, omc, Tc, errors, err_std, thresh_cond, check_cond, prev_rms);
 
     //-------------------------------Optimization
     for(int iter = 0; iter < std::numeric_limits<int>::max(); ++iter)
@@ -808,48 +802,25 @@ double cv::fisheye::calibrate(InputArrayOfArrays objectPoints, InputArrayOfArray
             (criteria.type == 3 && (change <= criteria.epsilon || iter >= criteria.maxCount)))
             break;
 
-        // double alpha_smooth2 = 1 - std::pow(1 - alpha_smooth, iter + 1.0);
+        double alpha_smooth2 = 1 - std::pow(1 - alpha_smooth, iter + 1.0);
 
         Mat JJ2, ex3;
         ComputeJacobians(objectPoints, imagePoints, finalParam, omc, Tc, check_cond,thresh_cond, JJ2, ex3);
 
-        // Create a diagonal matrix of JJ2
-        cv::Mat JJ2diag = cv::Mat::zeros(JJ2.cols, JJ2.rows, CV_64F);
-        for (int rc = 0; rc < JJ2.cols; rc++)
-            JJ2diag.at<double>(rc, rc) = JJ2.at<double>(rc, rc);
-
-        cv::Mat JJ2Plus = JJ2 + (lambda * JJ2diag);
-
-        // Various changes below are from https://github.com/opencv/opencv/pull/10692
-        // which I agree with and don't know why they have not been merged into OpenCV trunk.
         Mat G;
-        // solve(JJ2, ex3, G);
-        // currentParam = finalParam + alpha_smooth2*G;
-        solve(JJ2Plus, ex3, G);
-        currentParam = finalParam + G;
+        solve(JJ2, ex3, G);
+        currentParam = finalParam + alpha_smooth2*G;
 
         change = norm(Vec4d(currentParam.f[0], currentParam.f[1], currentParam.c[0], currentParam.c[1]) -
                 Vec4d(finalParam.f[0], finalParam.f[1], finalParam.c[0], finalParam.c[1]))
                 / norm(Vec4d(currentParam.f[0], currentParam.f[1], currentParam.c[0], currentParam.c[1]));
 
-        // finalParam = currentParam;
-        double rms_err = 0;
-        EstimateUncertainties(objectPoints, imagePoints, currentParam, omc, Tc, errors, err_std, thresh_cond, check_cond, rms_err);
+        finalParam = currentParam;
 
-        // if (recompute_extrinsic)
-        //    CalibrateExtrinsics(objectPoints,  imagePoints, finalParam, check_cond,
-        //                            thresh_cond, omc, Tc);
-        if (rms_err < prev_rms)
-        {
-            prev_rms = rms_err;
-            finalParam = currentParam;
         if (recompute_extrinsic)
-                CalibrateExtrinsics(objectPoints, imagePoints, finalParam, check_cond, thresh_cond, omc, Tc);
-            lambda /= nu;
-        }
-        else
         {
-            lambda *= nu;
+            CalibrateExtrinsics(objectPoints,  imagePoints, finalParam, check_cond,
+                                    thresh_cond, omc, Tc);
         }
     }
 
@@ -917,8 +888,8 @@ double cv::fisheye::calibrateWithErrors(InputArrayOfArrays objectPoints, InputAr
     IntrinsicParams currentParam;
     IntrinsicParams errors;
 
-    finalParam.isEstimate[0] = flags & CALIB_FIX_FOCAL_LENGTH ? 0 : 1;
-    finalParam.isEstimate[1] = flags & CALIB_FIX_FOCAL_LENGTH ? 0 : 1;
+    finalParam.isEstimate[0] = 1;
+    finalParam.isEstimate[1] = 1;
     finalParam.isEstimate[2] = flags & CALIB_FIX_PRINCIPAL_POINT ? 0 : 1;
     finalParam.isEstimate[3] = flags & CALIB_FIX_PRINCIPAL_POINT ? 0 : 1;
     finalParam.isEstimate[4] = flags & CALIB_FIX_SKEW ? 0 : 1;
@@ -961,10 +932,6 @@ double cv::fisheye::calibrateWithErrors(InputArrayOfArrays objectPoints, InputAr
 
     CalibrateExtrinsics(objectPoints, imagePoints, finalParam, check_cond, thresh_cond, omc, Tc);
 
-    double lambda = 1.0;
-    const double nu = 1.414213562; // sqrt(2), chosen by experiment
-    double prev_rms;
-    EstimateUncertainties(objectPoints, imagePoints, finalParam, omc, Tc, errors, err_std, thresh_cond, check_cond, prev_rms);
 
     //-------------------------------Optimization
     for (int iter = 0; iter < std::numeric_limits<int>::max(); ++iter)
@@ -974,49 +941,25 @@ double cv::fisheye::calibrateWithErrors(InputArrayOfArrays objectPoints, InputAr
             (criteria.type == 3 && (change <= criteria.epsilon || iter >= criteria.maxCount)))
             break;
 
-        // double alpha_smooth2 = 1 - std::pow(1 - alpha_smooth, iter + 1.0);
+        double alpha_smooth2 = 1 - std::pow(1 - alpha_smooth, iter + 1.0);
 
         Mat JJ2, ex3;
         ComputeJacobians(objectPoints, imagePoints, finalParam, omc, Tc, check_cond, thresh_cond, JJ2, ex3);
 
-        // Create a diagonal matrix of JJ2
-        cv::Mat JJ2diag = cv::Mat::zeros(JJ2.cols, JJ2.rows, CV_64F);
-        for (int rc = 0; rc < JJ2.cols; rc++)
-            JJ2diag.at<double>(rc, rc) = JJ2.at<double>(rc, rc);
-
-        cv::Mat JJ2Plus = JJ2 + (lambda * JJ2diag);
-
-        // Various changes below are from https://github.com/opencv/opencv/pull/10692
-        // which I agree with and don't know why they have not been merged into OpenCV trunk.
         Mat G;
-        // solve(JJ2, ex3, G);
-        // currentParam = finalParam + alpha_smooth2 * G;
-        solve(JJ2Plus, ex3, G);
-        currentParam = finalParam + G;
+        solve(JJ2, ex3, G);
+        currentParam = finalParam + alpha_smooth2 * G;
 
         change = norm(Vec4d(currentParam.f[0], currentParam.f[1], currentParam.c[0], currentParam.c[1]) -
             Vec4d(finalParam.f[0], finalParam.f[1], finalParam.c[0], finalParam.c[1]))
             / norm(Vec4d(currentParam.f[0], currentParam.f[1], currentParam.c[0], currentParam.c[1]));
 
-        // finalParam = currentParam;
-        double rms_err = 0;
-        EstimateUncertainties(objectPoints, imagePoints, currentParam, omc, Tc, errors, err_std, thresh_cond, check_cond, rms_err);
+        finalParam = currentParam;
 
-        // if (recompute_extrinsic)
-        // {
-        //     CalibrateExtrinsics(objectPoints, imagePoints, finalParam, check_cond,
-        //         thresh_cond, omc, Tc);
-        if (rms_err < prev_rms)
-        {
-            prev_rms = rms_err;
-            finalParam = currentParam;
         if (recompute_extrinsic)
-                CalibrateExtrinsics(objectPoints, imagePoints, finalParam, check_cond, thresh_cond, omc, Tc);
-            lambda /= nu;
-        }
-        else
         {
-            lambda *= nu;
+            CalibrateExtrinsics(objectPoints, imagePoints, finalParam, check_cond,
+                thresh_cond, omc, Tc);
         }
     }
 
@@ -1067,7 +1010,7 @@ double cv::fisheye::calibrateWithErrors(InputArrayOfArrays objectPoints, InputAr
 
 double cv::fisheye::stereoCalibrate(InputArrayOfArrays objectPoints, InputArrayOfArrays imagePoints1, InputArrayOfArrays imagePoints2,
                                     InputOutputArray K1, InputOutputArray D1, InputOutputArray K2, InputOutputArray D2, Size imageSize,
-    OutputArray R, OutputArray T, int flags, int& bad_stereo_pair_index, TermCriteria criteria)
+                                    OutputArray R, OutputArray T, int flags, TermCriteria criteria)
 {
     CV_INSTRUMENT_REGION();
 
@@ -1240,10 +1183,6 @@ double cv::fisheye::stereoCalibrate(InputArrayOfArrays objectPoints, InputArrayO
                 {
                     abs_max = fabs(ekk.at<double>(i));
                 }
-                if (abs_max >= threshold) {
-                    bad_stereo_pair_index = image_idx;
-                    return -1.;
-                }
             }
 
             CV_Assert(abs_max < threshold); // bad stereo pair
@@ -1313,7 +1252,7 @@ double cv::fisheye::stereoCalibrate(InputArrayOfArrays objectPoints, InputArrayO
 double cv::fisheye::stereoCalibrateWithErrors(InputArrayOfArrays objectPoints, InputArrayOfArrays imagePoints1, InputArrayOfArrays imagePoints2,
                                               InputOutputArray K1, InputOutputArray D1, InputOutputArray K2, InputOutputArray D2, Size imageSize,
                                               OutputArray R, OutputArray T, std::vector<double>& stdDevs, std::vector<double>& rmsPerStereoPair,
-    int flags, int& bad_stereo_pair_index, TermCriteria criteria)
+                                              int flags, TermCriteria criteria)
 {
     CV_INSTRUMENT_REGION()
 
@@ -1486,10 +1425,6 @@ double cv::fisheye::stereoCalibrateWithErrors(InputArrayOfArrays objectPoints, I
                 {
                     abs_max = fabs(ekk.at<double>(i));
                 }
-                if (abs_max >= threshold) {
-                    bad_stereo_pair_index = image_idx;
-                    return -1.;
-                }
             }
 
             CV_Assert(abs_max < threshold); // bad stereo pair
@@ -1571,8 +1506,7 @@ double cv::fisheye::stereoCalibrateWithErrors(InputArrayOfArrays objectPoints, I
     return rms;
 }
 
-namespace cv {
-    namespace {
+namespace cv{ namespace {
 void subMatrix(const Mat& src, Mat& dst, const std::vector<uchar>& cols, const std::vector<uchar>& rows)
 {
     CV_Assert(src.channels() == 1);
@@ -1599,8 +1533,7 @@ void subMatrix(const Mat& src, Mat& dst, const std::vector<uchar>& cols, const s
     }
 }
 
-    }
-}
+}}
 
 cv::internal::IntrinsicParams::IntrinsicParams():
     f(Vec2d::all(0)), c(Vec2d::all(0)), k(Vec4d::all(0)), alpha(0), isEstimate(9,0)
